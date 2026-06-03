@@ -1,10 +1,20 @@
 export const runtime = 'nodejs';
 
+import arcjet, { shield, detectBot } from "@arcjet/next";
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import child from 'child_process';
 import { createWorker } from 'tesseract.js';
+
+
+const aj = arcjet({
+  key: process.env.ARCJET_KEY,
+  rules: [
+    shield({ mode: "LIVE" }),
+    detectBot({ mode: "LIVE" }),
+  ],
+});
 
 // Lazy singleton worker to avoid expensive re-initialization on every request
 async function getWorker() {
@@ -19,11 +29,17 @@ async function getWorker() {
 }
 
 export async function POST(req) {
+  
+  const decision = await aj.protect(req);
+  if (decision.isDenied()) {
+    return new Response(JSON.stringify({ error: "Security check failed" }), { status: 403 });
+  }
+
   try {
     const { imageBase64, mimeType } = await req.json();
     if (!imageBase64) return new Response(JSON.stringify({ error: 'missing imageBase64' }), { status: 400 });
 
-    // Try tesseract.js first
+  
     try {
       const worker = await getWorker();
       const buffer = Buffer.from(imageBase64, 'base64');
@@ -34,7 +50,7 @@ export async function POST(req) {
       console.warn('tesseract.js not available or failed:', e && e.message ? e.message : e);
     }
 
-    // Fallback to system tesseract CLI
+   
     try {
       const tmpPath = path.join(os.tmpdir(), `receipt_${Date.now()}.png`);
       fs.writeFileSync(tmpPath, Buffer.from(imageBase64, 'base64'));
@@ -48,7 +64,7 @@ export async function POST(req) {
       console.warn('tesseract CLI check failed:', cliErr && cliErr.message ? cliErr.message : cliErr);
     }
 
-    // If both Gemini API and OCR CLI fail, return a mock response so the UI doesn't break
+   
     const mockText = "Total Amount: 15.99\nDate: 2026-06-03\nMerchant: Demo Store\nCategory: Office Supplies";
     return new Response(JSON.stringify({ text: mockText }), { headers: { 'Content-Type': 'application/json' } });
   } catch (err) {
